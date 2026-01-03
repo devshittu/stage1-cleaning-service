@@ -16,11 +16,11 @@ logger = logging.getLogger("ingestion_service")
 def sanitize_and_parse_json(json_string: str, line_number: int = 0) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Parse JSON with multiple fallback strategies.
-    
+
     Args:
         json_string: Raw JSON string to parse
         line_number: Line number for logging
-    
+
     Returns:
         Tuple of (parsed_dict, error_message)
         - Success: (dict, None)
@@ -34,6 +34,8 @@ def sanitize_and_parse_json(json_string: str, line_number: int = 0) -> Tuple[Opt
     # Strategy 1: Direct parse (works for valid JSON)
     try:
         result = json.loads(original)
+        # Post-processing: Fix malformed URLs
+        result = _fix_malformed_urls(result)
         return result, None
     except json.JSONDecodeError as e:
         first_error = f"{e.msg} at position {e.pos}"
@@ -45,6 +47,7 @@ def sanitize_and_parse_json(json_string: str, line_number: int = 0) -> Tuple[Opt
     try:
         cleaned = _fix_unescaped_quotes(original, error_pos)
         result = json.loads(cleaned)
+        result = _fix_malformed_urls(result)
         logger.info(f"Line {line_number}: Fixed unescaped quotes")
         return result, None
     except Exception as e:
@@ -54,6 +57,7 @@ def sanitize_and_parse_json(json_string: str, line_number: int = 0) -> Tuple[Opt
     try:
         cleaned = _fix_unicode_issues(original)
         result = json.loads(cleaned)
+        result = _fix_malformed_urls(result)
         logger.info(f"Line {line_number}: Fixed Unicode issues")
         return result, None
     except Exception as e:
@@ -64,6 +68,7 @@ def sanitize_and_parse_json(json_string: str, line_number: int = 0) -> Tuple[Opt
         cleaned = _fix_unicode_issues(original)
         cleaned = _fix_unescaped_quotes(cleaned, 0)
         result = json.loads(cleaned)
+        result = _fix_malformed_urls(result)
         logger.info(f"Line {line_number}: Fixed with combined strategy")
         return result, None
     except Exception as e:
@@ -73,6 +78,7 @@ def sanitize_and_parse_json(json_string: str, line_number: int = 0) -> Tuple[Opt
     try:
         result = _extract_fields_aggressive(original)
         if result and 'document_id' in result and 'text' in result:
+            result = _fix_malformed_urls(result)
             logger.warning(f"Line {line_number}: Used aggressive extraction")
             return result, None
     except Exception as e:
@@ -199,6 +205,35 @@ def _fix_unicode_issues(text: str) -> str:
     text = ''.join(c for c in text if ord(c) >= 32 or c in '\t\n\r')
 
     return text
+
+
+def _fix_malformed_urls(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fix common URL issues in the document data.
+    - Fix httpss:// → https://
+    - Fix httpp:// → http://
+    - Remove invalid URL schemes
+    """
+    if not isinstance(data, dict):
+        return data
+
+    url_fields = ['source_url', 'cleaned_source_url']
+
+    for field in url_fields:
+        if field in data and isinstance(data[field], str):
+            url = data[field]
+            # Fix double scheme characters
+            url = url.replace('httpss://', 'https://')
+            url = url.replace('httpp://', 'http://')
+            url = url.replace('httpps://', 'https://')
+            # Ensure it starts with a valid scheme
+            if url and not url.startswith(('http://', 'https://')):
+                if '://' in url:
+                    # Has a scheme but it's invalid - try to fix
+                    url = 'https://' + url.split('://', 1)[1]
+            data[field] = url
+
+    return data
 
 
 def _extract_fields_aggressive(json_string: str) -> Optional[Dict[str, Any]]:
