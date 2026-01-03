@@ -113,4 +113,125 @@ logging:
       level: INFO
       propagate: false
 
+# =============================================================================
+# BATCH LIFECYCLE MANAGEMENT (NEW)
+# =============================================================================
+
+batch_processing:
+  # Checkpoint configuration
+  checkpoint_enabled: true
+  checkpoint_interval: 10  # Save checkpoint every N documents
+  checkpoint_ttl_seconds: 86400  # 24 hours
+
+  # Default batch size for processing
+  default_batch_size: 100
+  max_batch_size: 10000
+
+  # Progressive persistence
+  save_intermediate_results: true
+
+# =============================================================================
+# RESOURCE MANAGEMENT (NEW)
+# =============================================================================
+
+resource_management:
+  # Idle detection and cleanup
+  idle_timeout_seconds: 300  # 5 minutes
+  cleanup_on_idle: true
+
+  # Resource thresholds (warnings)
+  cpu_threshold_percent: 95
+  memory_threshold_percent: 90
+
+  # Low-resource mode
+  enable_low_resource_mode: false
+
+  # GPU management
+  gpu_memory_fraction: 0.8  # Use 80% of GPU memory max
+
+# =============================================================================
+# CLOUDEVENTS MULTI-BACKEND EVENT PUBLISHING (NEW)
+# =============================================================================
+
+events:
+  # Global enable/disable for all event publishing
+  enabled: true
+
+  # Event filtering - specify which events to publish (optional)
+  # If empty or null, all events are published
+  # Available events: job.started, job.progress, job.paused, job.resumed, job.completed, job.failed, job.cancelled
+  publish_events: null  # null = publish all events
+
+  # Backend configurations
+  backends:
+    # PRIMARY: Redis Streams (low-latency, consumer group ready)
+    - type: redis_streams
+      enabled: true
+      config:
+        url: null  # Uses REDIS_CACHE_URL from environment
+        stream_name: "stage1:cleaning:events"
+        max_len: 10000  # Trim to last 10K events
+        ttl_seconds: 86400  # 24 hours
+        fail_silently: true
+
+    # SECONDARY: Webhooks (HTTP callbacks to downstream stages)
+    - type: webhook
+      enabled: false  # Enable and configure URLs in production
+      config:
+        urls: []  # Add webhook URLs here, e.g., ["http://stage2-orchestrator:8000/webhooks/cleaning-completed"]
+        headers: {}  # Optional headers, e.g., {"X-API-Key": "secret"}
+        timeout_seconds: 30
+        retry_attempts: 3
+        fail_silently: true
+
+    # OPTIONAL: Kafka (high-throughput for event-driven architectures)
+    - type: kafka
+      enabled: false
+      config:
+        bootstrap_servers: ["kafka:9092"]
+        topic: "stage1.cleaning.events"
+        compression_type: "gzip"
+        fail_silently: true
+
+    # OPTIONAL: NATS (cloud-native messaging)
+    - type: nats
+      enabled: false
+      config:
+        servers: ["nats://nats:4222"]
+        subject: "stage1.cleaning.events"
+        use_jetstream: true
+        fail_silently: true
+
+    # OPTIONAL: RabbitMQ (flexible message routing)
+    - type: rabbitmq
+      enabled: false
+      config:
+        url: "amqp://guest:guest@rabbitmq:5672/"
+        exchange: "stage1.cleaning"
+        routing_key: "events"
+        exchange_type: "topic"
+        fail_silently: true
+
+# =============================================================================
+# METADATA REGISTRY INTEGRATION (NEW)
+# =============================================================================
+
+metadata_registry:
+  # Enable/disable metadata registry integration
+  enabled: true
+
+  # Primary backend (postgresql)
+  primary_backend: postgresql
+
+  # Enable Redis cache for metadata queries
+  enable_redis_cache: true
+
+  # Connection pooling
+  pool_min_size: 2
+  pool_max_size: 10
+
+  # Retry configuration
+  max_retries: 3
+  retry_delay_seconds: 2
+
 # config/settings.yaml
