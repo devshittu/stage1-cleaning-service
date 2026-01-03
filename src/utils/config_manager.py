@@ -211,6 +211,78 @@ class LoggingConfig(BaseModel):
     )
 
 
+class BatchProcessingSettings(BaseModel):
+    """Settings for batch processing and checkpointing."""
+    checkpoint_enabled: bool = Field(True, description="Enable checkpoint system")
+    checkpoint_interval: int = Field(10, description="Save checkpoint every N documents")
+    checkpoint_ttl_seconds: int = Field(86400, description="Checkpoint TTL in seconds")
+    default_batch_size: int = Field(100, description="Default batch size")
+    max_batch_size: int = Field(10000, description="Maximum batch size")
+    save_intermediate_results: bool = Field(True, description="Save intermediate results")
+
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,
+        protected_namespaces=()
+    )
+
+
+class ResourceManagementSettings(BaseModel):
+    """Settings for resource monitoring and management."""
+    idle_timeout_seconds: int = Field(300, description="Idle timeout in seconds")
+    cleanup_on_idle: bool = Field(True, description="Cleanup resources on idle")
+    cpu_threshold_percent: int = Field(95, description="CPU threshold percentage")
+    memory_threshold_percent: int = Field(90, description="Memory threshold percentage")
+    enable_low_resource_mode: bool = Field(False, description="Enable low resource mode")
+    gpu_memory_fraction: float = Field(0.8, description="GPU memory fraction")
+
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,
+        protected_namespaces=()
+    )
+
+
+class EventBackendConfig(BaseModel):
+    """Configuration for an event backend."""
+    type: str = Field(..., description="Backend type")
+    enabled: bool = Field(False, description="Enable this backend")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Backend-specific config")
+
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,
+        protected_namespaces=(),
+        extra='allow'
+    )
+
+
+class EventsSettings(BaseModel):
+    """Settings for CloudEvents multi-backend publishing."""
+    enabled: bool = Field(True, description="Enable event publishing")
+    publish_events: Optional[List[str]] = Field(None, description="Event types to publish")
+    backends: List[EventBackendConfig] = Field(default_factory=list, description="Event backends")
+
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,
+        protected_namespaces=(),
+        extra='allow'
+    )
+
+
+class MetadataRegistrySettings(BaseModel):
+    """Settings for metadata registry integration."""
+    enabled: bool = Field(True, description="Enable metadata registry")
+    primary_backend: str = Field("postgresql", description="Primary backend")
+    enable_redis_cache: bool = Field(True, description="Enable Redis cache")
+    pool_min_size: int = Field(2, description="Connection pool min size")
+    pool_max_size: int = Field(10, description="Connection pool max size")
+    max_retries: int = Field(3, description="Max retry attempts")
+    retry_delay_seconds: int = Field(2, description="Retry delay in seconds")
+
+    model_config = SettingsConfigDict(
+        arbitrary_types_allowed=True,
+        protected_namespaces=()
+    )
+
+
 class Settings(BaseSettings):
     """Main settings model, loaded from a YAML file."""
     general: GeneralSettings
@@ -218,6 +290,10 @@ class Settings(BaseSettings):
     celery: CelerySettings
     storage: StorageSettings
     logging: LoggingConfig
+    batch_processing: Optional[BatchProcessingSettings] = Field(None, description="Batch processing settings")
+    resource_management: Optional[ResourceManagementSettings] = Field(None, description="Resource management settings")
+    events: Optional[EventsSettings] = Field(None, description="Event publishing settings")
+    metadata_registry: Optional[MetadataRegistrySettings] = Field(None, description="Metadata registry settings")
 
     model_config = SettingsConfigDict(
         protected_namespaces=()
