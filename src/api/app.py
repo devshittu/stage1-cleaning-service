@@ -667,11 +667,24 @@ async def submit_batch_job(request: BatchSubmitRequest, http_request: Request):
         job_manager = get_job_manager()
         await job_manager.initialize_pool()
 
+        # Serialize documents for Celery
+        documents_json = json.dumps([doc.model_dump() if hasattr(doc, 'model_dump') else doc for doc in request.documents])
+
+        # Store resume data in metadata for potential resume operations
+        resume_metadata = {
+            **(request.metadata or {}),  # Include user metadata if provided
+            "_resume_data": {
+                "documents_json": documents_json,
+                "checkpoint_interval": request.checkpoint_interval,
+                "persist_to_backends": request.persist_to_backends
+            }
+        }
+
         job = await job_manager.create_job(
             job_id=job_id,
             batch_id=batch_id,
             total_documents=total_documents,
-            metadata=request.metadata
+            metadata=resume_metadata
         )
 
         if not job:
@@ -679,9 +692,6 @@ async def submit_batch_job(request: BatchSubmitRequest, http_request: Request):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create job record"
             )
-
-        # Serialize documents for Celery
-        documents_json = json.dumps([doc.model_dump() if hasattr(doc, 'model_dump') else doc for doc in request.documents])
 
         # Submit Celery task
         task = process_batch_task.delay(
@@ -833,8 +843,7 @@ async def pause_job(job_id: str, http_request: Request):
 
         logger.info(
             "job_pause_requested",
-            job_id=job_id,
-            request_id=request_id
+            extra={"job_id": job_id, "request_id": request_id}
         )
 
         return JobPauseResponse(
@@ -897,19 +906,57 @@ async def resume_job(job_id: str, http_request: Request):
                 detail=f"Job is not paused (current status: {job.status.value})"
             )
 
-        # For resume, we need to resubmit the job
-        # The Celery task will load the checkpoint and skip processed documents
-        # This requires storing the original request, which we'll do via metadata
+        # Extract resume data from metadata
+        if not job.metadata or "_resume_data" not in job.metadata:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Job does not have resume data in metadata. Cannot resume. "
+                       "This may be an older job created before resume support was added."
+            )
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Resume functionality requires storing original batch data. "
-                   "This will be implemented in the next iteration. "
-                   "Current workaround: Resubmit the batch job manually."
+        resume_data = job.metadata["_resume_data"]
+        documents_json = resume_data.get("documents_json")
+        checkpoint_interval = resume_data.get("checkpoint_interval")
+        persist_to_backends = resume_data.get("persist_to_backends")
+
+        if not documents_json:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Resume data is incomplete. Missing documents data."
+            )
+
+        # Update job status to QUEUED for resume
+        await job_manager.update_job_status(
+            job_id=job_id,
+            status=JobStatus.QUEUED
         )
 
-        # TODO: Implement resume by storing original batch in metadata
-        # and resubmitting with checkpoint awareness
+        # Resubmit the Celery task (it will load checkpoint and skip processed documents)
+        task = process_batch_task.delay(
+            job_id=job_id,
+            batch_id=job.batch_id,
+            documents_json=documents_json,
+            checkpoint_interval=checkpoint_interval,
+            persist_to_backends=persist_to_backends
+        )
+
+        # Update job with new Celery task ID
+        await job_manager.update_job_status(
+            job_id=job_id,
+            status=JobStatus.QUEUED,
+            celery_task_id=task.id
+        )
+
+        logger.info(
+            f"job_resumed: job_id={job_id}, celery_task_id={task.id}, request_id={request_id}"
+        )
+
+        return JobResumeResponse(
+            status="success",
+            job_id=job_id,
+            message="Job resumed successfully. Processing will continue from last checkpoint.",
+            checkpoint_loaded=True
+        )
 
     except HTTPException:
         raise
@@ -978,9 +1025,11 @@ async def cancel_job(job_id: str, http_request: Request):
 
         logger.info(
             "job_cancel_requested",
-            job_id=job_id,
-            celery_task_id=job.celery_task_id,
-            request_id=request_id
+            extra={
+                "job_id": job_id,
+                "celery_task_id": job.celery_task_id,
+                "request_id": request_id
+            }
         )
 
         return JobCancelResponse(
