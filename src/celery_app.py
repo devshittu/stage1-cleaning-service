@@ -69,10 +69,11 @@ def run_async_safe(coro):
     Safely run async coroutine in synchronous Celery context.
 
     Celery tasks run in synchronous context, but we need to call async functions
-    from managers (JobManager, CheckpointManager, etc.). Using asyncio.run()
-    can cause "event loop already running" errors.
+    from managers (JobManager, CheckpointManager, etc.). This uses the persistent
+    event loop created during worker_process_init to avoid connection pool issues.
 
-    This helper creates a new event loop for each async call, ensuring clean execution.
+    Important: The event loop is reused across all async calls in a worker process,
+    ensuring that connection pools (PostgreSQL, Redis) remain valid.
 
     Args:
         coro: Async coroutine to execute
@@ -83,24 +84,16 @@ def run_async_safe(coro):
     Raises:
         Exception: If coroutine execution fails
     """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        try:
-            # Cancel all pending tasks
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            # Run loop once more to handle cancellations
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        except Exception:
-            pass
-        finally:
-            loop.close()
-            asyncio.set_event_loop(None)
+    global _worker_event_loop
+
+    # If no persistent loop exists (shouldn't happen), create one as fallback
+    if _worker_event_loop is None or _worker_event_loop.is_closed():
+        logger.warning("Persistent event loop not found. Creating new loop.")
+        _worker_event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_worker_event_loop)
+
+    # Use the persistent event loop
+    return _worker_event_loop.run_until_complete(coro)
 
 # Initialize the Celery app with a specific name and broker/backend from settings.
 celery_app = Celery(
@@ -125,34 +118,62 @@ celery_app.conf.update(
 # It will be set by the signal handler below.
 preprocessor = None
 
+# Global event loop for worker process (reused for all async calls)
+_worker_event_loop = None
+
 
 @signals.worker_process_init.connect
 def initialize_preprocessor(**kwargs):
     """
     This signal handler runs when each Celery worker process is initialized.
     It's the perfect place to load the heavy spaCy model to ensure a clean
-    GPU context for each worker.
+    GPU context for each worker. Also sets up a persistent event loop for
+    async operations to avoid connection pool issues.
     """
-    global preprocessor
+    global preprocessor, _worker_event_loop
     logger.info(
         "Celery worker process initializing. Loading TextPreprocessor instance.")
     preprocessor = TextPreprocessor()
     logger.info(
         "TextPreprocessor initialized successfully in Celery worker.")
 
+    # Create a persistent event loop for this worker process
+    _worker_event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_worker_event_loop)
+    logger.info("Persistent event loop created for worker process.")
+
 
 @signals.worker_process_shutdown.connect
 def cleanup_preprocessor(**kwargs):
     """
     Signal handler for worker process shutdown.
-    Properly closes TextPreprocessor resources.
+    Properly closes TextPreprocessor resources and event loop.
     """
-    global preprocessor
+    global preprocessor, _worker_event_loop
     if preprocessor:
         logger.info(
             "Celery worker shutting down. Cleaning up TextPreprocessor.")
         preprocessor.close()
         preprocessor = None
+
+    # Close the persistent event loop
+    if _worker_event_loop and not _worker_event_loop.is_closed():
+        logger.info("Closing persistent event loop.")
+        try:
+            # Cancel all pending tasks
+            pending = asyncio.all_tasks(_worker_event_loop)
+            for task in pending:
+                task.cancel()
+            # Run loop once more to handle cancellations
+            if pending:
+                _worker_event_loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        except Exception as e:
+            logger.warning(f"Error during event loop cleanup: {e}")
+        finally:
+            _worker_event_loop.close()
+            _worker_event_loop = None
 
 
 @celery_app.task(
@@ -510,9 +531,11 @@ def process_batch_task(
             if should_stop:
                 logger.info(
                     f"job_{reason}_detected",
-                    job_id=job_id,
-                    processed_count=processed_count,
-                    total_count=total_documents
+                    extra={
+                        "job_id": job_id,
+                        "processed_count": processed_count,
+                        "total_count": total_documents
+                    }
                 )
 
                 # Save checkpoint
