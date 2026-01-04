@@ -82,9 +82,16 @@ class EventPublisher:
             try:
                 from src.utils.config_manager import ConfigManager
                 settings = ConfigManager.get_settings()
-                self.config = settings.get("events", {})
+                # Access events attribute and convert to dict if exists
+                if hasattr(settings, 'events') and settings.events is not None:
+                    self.config = settings.events.model_dump()
+                else:
+                    self.config = {}
             except Exception as e:
-                logger.warning(f"failed_to_load_event_config: {e}")
+                logger.warning(
+                    "failed_to_load_event_config",
+                    extra={"error": str(e)}
+                )
                 self.config = {}
 
         self.enabled = self.config.get("enabled", False)
