@@ -363,6 +363,10 @@ class JobManager:
                 if not row:
                     return None
 
+                # Parse JSONB fields (asyncpg returns them as strings)
+                metadata = json.loads(row['metadata']) if row['metadata'] else {}
+                statistics = json.loads(row['statistics']) if row['statistics'] else {}
+
                 return JobState(
                     job_id=row['job_id'],
                     batch_id=row['batch_id'],
@@ -378,9 +382,9 @@ class JobManager:
                     resumed_at=row['resumed_at'],
                     completed_at=row['completed_at'],
                     updated_at=row['updated_at'],
-                    metadata=row['metadata'],
+                    metadata=metadata,
                     error_message=row['error_message'],
-                    statistics=row['statistics']
+                    statistics=statistics
                 )
 
         except Exception as e:
@@ -432,8 +436,13 @@ class JobManager:
 
                 rows = await conn.fetch(query, *params)
 
-                return [
-                    JobState(
+                jobs = []
+                for row in rows:
+                    # Parse JSONB fields (asyncpg returns them as strings)
+                    metadata = json.loads(row['metadata']) if row['metadata'] else {}
+                    statistics = json.loads(row['statistics']) if row['statistics'] else {}
+
+                    jobs.append(JobState(
                         job_id=row['job_id'],
                         batch_id=row['batch_id'],
                         status=JobStatus(row['status']),
@@ -448,12 +457,12 @@ class JobManager:
                         resumed_at=row['resumed_at'],
                         completed_at=row['completed_at'],
                         updated_at=row['updated_at'],
-                        metadata=row['metadata'],
+                        metadata=metadata,
                         error_message=row['error_message'],
-                        statistics=row['statistics']
-                    )
-                    for row in rows
-                ]
+                        statistics=statistics
+                    ))
+
+                return jobs
 
         except Exception as e:
             logger.error(f"failed_to_list_jobs: {e}")
