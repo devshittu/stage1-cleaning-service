@@ -27,6 +27,7 @@ from src.main import preprocess_file
 from src.utils.config_manager import ConfigManager
 from src.utils.logger import setup_logging
 from src.core.processor import TextPreprocessor
+from src.cli.batch_commands import batch  # Batch management CLI commands
 
 # Add src to the Python path if it's not already there.
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -274,31 +275,42 @@ def _format_html_docs(docs):
 
 
 @click.group()
-@click.version_option(version="1.0.0", prog_name="ingestion-cli")
+@click.version_option(version="2.0.0", prog_name="ingestion-cli")
 @click.pass_context
 def cli(ctx):
     """
-    🧹 Data Ingestion & Preprocessing CLI
-    
+    🧹 Data Ingestion & Preprocessing CLI v2.0.0
+
     A command-line interface for cleaning and preprocessing news articles.
     Supports batch processing, Celery integration, and multiple storage backends.
-    
+
     \b
     Quick Start:
         ingestion-cli info                    # Show system information
         ingestion-cli test-model              # Test spaCy model
         ingestion-cli validate input.jsonl    # Validate file
         ingestion-cli process -i in.jsonl -o out.jsonl  # Process articles
-    
+
+        # NEW: Batch lifecycle management
+        ingestion-cli batch submit -f data/input.jsonl --watch
+        ingestion-cli batch status -j <job_id>
+        ingestion-cli batch list --status RUNNING
+        ingestion-cli batch pause -j <job_id>
+        ingestion-cli batch resume -j <job_id>
+
     \b
     Documentation:
         ingestion-cli docs export --format markdown  # Export CLI docs
         ingestion-cli docs show                      # View docs in terminal
-    
+
     For detailed help on any command, use:
         ingestion-cli COMMAND --help
     """
     ctx.ensure_object(dict)
+
+
+# Register batch command group for lifecycle management
+cli.add_command(batch)
 
 
 @cli.group(name="docs")

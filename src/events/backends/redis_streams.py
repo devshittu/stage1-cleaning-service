@@ -81,8 +81,10 @@ class RedisStreamsBackend(EventBackend):
 
             logger.info(
                 "redis_streams_backend_initialized",
-                stream_name=self.stream_name,
-                max_len=self.max_len
+                extra={
+                    "stream_name": self.stream_name,
+                    "max_len": self.max_len
+                }
             )
 
             return True
@@ -142,10 +144,12 @@ class RedisStreamsBackend(EventBackend):
 
             logger.info(
                 "event_published_to_redis_streams",
-                stream_name=self.stream_name,
-                message_id=message_id,
-                event_type=event.type,
-                event_id=event.id
+                extra={
+                    "stream_name": self.stream_name,
+                    "message_id": message_id,
+                    "event_type": event.type,
+                    "event_id": event.id
+                }
             )
 
             self._record_success()
