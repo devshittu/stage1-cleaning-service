@@ -329,7 +329,7 @@ class JobManager:
                     processed_documents,
                     failed_documents,
                     progress_percent,
-                    statistics if statistics else {},
+                    json.dumps(statistics) if statistics else json.dumps({}),
                     datetime.utcnow(),
                     job_id
                 )
